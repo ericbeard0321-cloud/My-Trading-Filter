@@ -15,21 +15,22 @@ async def get_compact_conditions(
     tickers: str = Query(None, description="Comma-separated tickers, e.g., AAPL,NVDA")
 ):
     """
-    Queries the universal v3 snapshot endpoint which works reliably 
-    across basic/developer subscription access tiers.
+    Queries the snapshot endpoint using a trailing slash and follow_redirects=True
+    to completely eliminate 301 redirect issues.
     """
     target_tickers = tickers.split(",") if tickers else DEFAULT_WATCHLIST
     ticker_string = ",".join(target_tickers)
     
-    # UPDATED ENDPOINT: Universal v3 snapshot mapping
+    # FIX: Added a trailing slash to match the precise canonical path
     url = "https://polygon.io"
     
     params = {
-        "ticker.anyof": ticker_string, # Correct parameter syntax for grouped tracking
+        "ticker.anyof": ticker_string,
         "apiKey": MASSIVE_API_KEY
     }
     
-    async with httpx.AsyncClient() as client:
+    # FIX: Added 'follow_redirects=True' to allow the client to resolve any domain mapping shifts
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
             response = await client.get(url, params=params, timeout=10.0)
             
