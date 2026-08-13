@@ -15,52 +15,54 @@ async def get_compact_conditions(
     tickers: str = Query(None, description="Comma-separated tickers, e.g., AAPL,NVDA")
 ):
     """
-    Queries Massive with cross-compatible mapping to stop 500 crashes
+    Queries the official Massive v3 snapshot endpoint using the mandatory 
+    Bearer Token Header authentication method to eliminate 401 errors.
     """
     target_tickers = tickers.split(",") if tickers else DEFAULT_WATCHLIST
     ticker_string = ",".join(target_tickers)
     
-    # Standard v3 snapshot URL
-    url = "https://api.polygon.io/v3/snapshot"
+    url = "https://massive.com"
     
+    # We pass the focus tickers here
     params = {
-        "ticker.anyof": ticker_string,
-        "apiKey": MASSIVE_API_KEY
+        "ticker": ticker_string
+    }
+    
+    # FIX: Pass the key securely inside the Headers dictionary, NOT the URL parameters
+    headers = {
+        "Authorization": f"Bearer {MASSIVE_API_KEY}"
     }
     
     async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
-            response = await client.get(url, params=params, timeout=10.0)
+            # We explicitly pass the url, params, AND headers to Massive
+            response = await client.get(url, params=params, headers=headers, timeout=10.0)
             
+            # Diagnostic trap: If it still fails, bubble up the exact response text
             if response.status_code != 200:
                 return {
-                    "market_conditions": f"Massive API connection error. Status Code: {response.status_code}"
+                    "market_conditions": f"Massive API returned code {response.status_code}. Detail: {response.text}"
                 }
                 
             raw_data = response.json()
         except Exception as e:
-            return {"market_conditions": f"Failed to connect to data provider: {str(e)}"}
+            return {"market_conditions": f"Failed to connect to Massive servers: {str(e)}"}
             
-    # Parse the v3 layout defensively without allowing crashes
+    # Parse the v3 layout defensively
     compact_results = []
     results_list = raw_data.get("results", [])
     
     if not results_list:
-        return {"market_conditions": "No live tickers returned. Check market hours or API Key permissions."}
+        return {"market_conditions": "No live tickers returned. Check your capitalization or ticker strings."}
 
     for item in results_list:
-        # Prevent crashes if fields are missing or structured differently
         ticker_symbol = item.get("ticker", "UNKNOWN")
         
-        # Massive's universal v3 snapshot can place variables inside the main dictionary
-        # or inside a sub-dictionary depending on tier limits. We check both paths:
+        # Pull key market data points cleanly from the payload
         spot_price = item.get("price") or item.get("session", {}).get("close") or "N/A"
-        
         todays_change_pct = item.get("todays_change_percent") or item.get("todaysChangePerc") or 0.0
-        
         volume = item.get("volume") or item.get("session", {}).get("volume") or 0
         
-        # Safely convert to float for text formatting strings
         try:
             pct_val = float(todays_change_pct)
             pct_str = f"{pct_val:.2f}%"
