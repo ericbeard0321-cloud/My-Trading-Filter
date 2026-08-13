@@ -15,56 +15,59 @@ async def get_compact_conditions(
     tickers: str = Query(None, description="Comma-separated tickers, e.g., AAPL,NVDA")
 ):
     """
-    Queries the snapshot endpoint using a trailing slash and follow_redirects=True
-    to completely eliminate 301 redirect issues.
+    Queries Massive with cross-compatible mapping to stop 500 crashes
     """
     target_tickers = tickers.split(",") if tickers else DEFAULT_WATCHLIST
     ticker_string = ",".join(target_tickers)
     
-    # FIX: Added a trailing slash to match the precise canonical path
-    url = "https://polygon.io"
+    # Standard v3 snapshot URL
+    url = "https://api.polygon.io/v3/snapshot"
     
     params = {
         "ticker.anyof": ticker_string,
         "apiKey": MASSIVE_API_KEY
     }
     
-    # FIX: Added 'follow_redirects=True' to allow the client to resolve any domain mapping shifts
     async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
             response = await client.get(url, params=params, timeout=10.0)
             
-            # Diagnostic trap: If it fails, show the exact error from Massive
             if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code, 
-                    detail=f"Massive API returned code {response.status_code}: {response.text}"
-                )
+                return {
+                    "market_conditions": f"Massive API connection error. Status Code: {response.status_code}"
+                }
                 
             raw_data = response.json()
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=500, detail=f"Failed to reach Massive: {str(e)}")
+        except Exception as e:
+            return {"market_conditions": f"Failed to connect to data provider: {str(e)}"}
             
-    # Parse the clean v3 layout
+    # Parse the v3 layout defensively without allowing crashes
     compact_results = []
     results_list = raw_data.get("results", [])
     
     if not results_list:
-        return {"market_conditions": "No real-time data returned for these tickers. Market may be closed or key invalid."}
+        return {"market_conditions": "No live tickers returned. Check market hours or API Key permissions."}
 
     for item in results_list:
+        # Prevent crashes if fields are missing or structured differently
         ticker_symbol = item.get("ticker", "UNKNOWN")
         
-        # Pull key market data points cleanly
-        spot_price = item.get("price", "N/A")
-        todays_change_pct = item.get("todays_change_percent", 0.0)
-        volume = item.get("volume", 0)
+        # Massive's universal v3 snapshot can place variables inside the main dictionary
+        # or inside a sub-dictionary depending on tier limits. We check both paths:
+        spot_price = item.get("price") or item.get("session", {}).get("close") or "N/A"
         
-        compact_string = (
-            f"{ticker_symbol}: Spot ${spot_price} | "
-            f"Daily Change {todays_change_pct:.2f}% | "
-            f"Vol {volume:,}"
-        )
+        todays_change_pct = item.get("todays_change_percent") or item.get("todaysChangePerc") or 0.0
+        
+        volume = item.get("volume") or item.get("session", {}).get("volume") or 0
+        
+        # Safely convert to float for text formatting strings
+        try:
+            pct_val = float(todays_change_pct)
+            pct_str = f"{pct_val:.2f}%"
+        except:
+            pct_str = "0.00%"
+            
+        compact_string = f"{ticker_symbol}: Spot ${spot_price} | Daily Change {pct_str} | Vol {volume:,}"
         compact_results.append(compact_string)
         
     return {"market_conditions": "\n".join(compact_results)}
